@@ -20,16 +20,21 @@ class NovedadController extends Controller
         if ($request->filled('tipo'))   $query->where('tipo', $request->tipo);
         if ($request->filled('estado')) $query->where('estado', $request->estado);
 
+        // El almacén de una novedad es el de su factura
+        $query->whereHas('factura', fn ($q) => $this->limitarAlmacenes($q, $request));
+
         return response()->json($query->orderByDesc('id_novedad')->paginate($request->get('per_page', 20)));
     }
 
-    // POST /novedades/{id}/resolver — ingresar al inventario o descartar
+    // POST /novedades/{id}/resolver: ingresar al inventario o descartar
     public function resolver(Request $request, int $id): JsonResponse
     {
-        $novedad = Novedad::find($id);
+        $novedad = Novedad::with('factura')->find($id);
         if (!$novedad || $novedad->estado !== 'pendiente') {
             return response()->json(['message' => 'Novedad no encontrada o ya resuelta.'], 422);
         }
+
+        $this->autorizarAlmacen($request, $novedad->factura->id_almacen);
 
         $validator = Validator::make($request->all(), [
             'accion' => 'required|in:ingresar,descartar',
@@ -55,22 +60,22 @@ class NovedadController extends Controller
                 $stock->update(['stock_actual' => $nuevo]);
 
                 InventarioMovimiento::create([
-                    'id_almacen' => $factura->id_almacen,
-                    'id_producto' => $novedad->id_producto,
-                    'tipo' => $novedad->tipo === 'sobrante' ? 'ajuste_positivo' : 'ajuste_negativo',
-                    'cantidad' => $novedad->cantidad,
+                    'id_almacen'     => $factura->id_almacen,
+                    'id_producto'    => $novedad->id_producto,
+                    'tipo'           => $novedad->tipo === 'sobrante' ? 'ajuste_positivo' : 'ajuste_negativo',
+                    'cantidad'       => $novedad->cantidad,
                     'stock_anterior' => $anterior,
-                    'stock_nuevo' => $nuevo,
-                    'referencia' => 'NOVEDAD-' . $novedad->id_novedad,
-                    'nota' => 'Resolución de novedad: ' . $request->nota,
-                    'id_usuario' => $request->user()->id_usuario,
+                    'stock_nuevo'    => $nuevo,
+                    'referencia'     => 'NOVEDAD-' . $novedad->id_novedad,
+                    'nota'           => 'Resolución de novedad: ' . $request->nota,
+                    'id_usuario'     => $request->user()->id_usuario,
                 ]);
             }
 
             $novedad->update([
-                'estado' => $request->accion === 'ingresar' ? 'ingresada' : 'descartada',
+                'estado'              => $request->accion === 'ingresar' ? 'ingresada' : 'descartada',
                 'id_usuario_resuelve' => $request->user()->id_usuario,
-                'nota' => $request->nota,
+                'nota'                => $request->nota,
             ]);
         });
 

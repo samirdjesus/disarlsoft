@@ -14,7 +14,7 @@ use Illuminate\Support\Facades\Validator;
 
 class TrasladoController extends Controller
 {
-    // Consulta de traslados realizados — el requisito que pediste explícitamente
+    // Consulta de traslados realizados: un usuario ve los que salen de o llegan a sus almacenes
     public function index(Request $request): JsonResponse
     {
         $query = Traslado::with(['almacenOrigen', 'almacenDestino', 'usuario', 'detalles']);
@@ -24,28 +24,41 @@ class TrasladoController extends Controller
         if ($request->filled('fecha_desde'))        $query->whereDate('fecha_traslado', '>=', $request->fecha_desde);
         if ($request->filled('fecha_hasta'))        $query->whereDate('fecha_traslado', '<=', $request->fecha_hasta);
 
+        $ids = $request->user()->almacenesPermitidos();
+        if ($ids !== null) {
+            $query->where(fn ($q) => $q->whereIn('id_almacen_origen', $ids)->orWhereIn('id_almacen_destino', $ids));
+        }
+
         return response()->json($query->orderByDesc('id_traslado')->paginate($request->get('per_page', 20)));
     }
 
-    public function show(int $id): JsonResponse
+    public function show(Request $request, int $id): JsonResponse
     {
         $traslado = Traslado::with(['detalles.producto', 'almacenOrigen', 'almacenDestino', 'usuario'])->find($id);
         if (!$traslado) {
             return response()->json(['message' => 'Traslado no encontrado'], 404);
         }
+
+        $u = $request->user();
+        abort_unless(
+            $u->puedeOperarEn($traslado->id_almacen_origen) || $u->puedeOperarEn($traslado->id_almacen_destino),
+            403,
+            'No tienes acceso a este traslado.'
+        );
+
         return response()->json($traslado);
     }
 
     public function store(Request $request): JsonResponse
     {
         $validator = Validator::make($request->all(), [
-            'id_almacen_origen'       => 'required|integer|exists:almacenes,id_almacen',
-            'id_almacen_destino'      => 'required|integer|different:id_almacen_origen|exists:almacenes,id_almacen',
-            'fecha_traslado'          => 'required|date',
-            'observaciones'           => 'nullable|string|max:300',
-            'detalles'                => 'required|array|min:1',
-            'detalles.*.id_producto'  => 'required|integer|exists:productos,id_producto',
-            'detalles.*.cantidad'     => 'required|numeric|min:0.01',
+            'id_almacen_origen'      => 'required|integer|exists:almacenes,id_almacen',
+            'id_almacen_destino'     => 'required|integer|different:id_almacen_origen|exists:almacenes,id_almacen',
+            'fecha_traslado'         => 'required|date',
+            'observaciones'          => 'nullable|string|max:300',
+            'detalles'               => 'required|array|min:1',
+            'detalles.*.id_producto' => 'required|integer|exists:productos,id_producto',
+            'detalles.*.cantidad'    => 'required|numeric|min:0.01',
         ]);
 
         if ($validator->fails()) {

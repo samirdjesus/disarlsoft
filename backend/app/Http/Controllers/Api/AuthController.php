@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Api;
 
+use App\Models\Almacen;
 use App\Http\Controllers\Controller;
 use App\Models\Usuario;
 use Illuminate\Http\Request;
@@ -74,17 +75,27 @@ class AuthController extends Controller
         auth('api')->logout();
         return response()->json(['message' => 'Sesión cerrada']);
     }
+private function formatoUsuario(Usuario $u): array
+{
+    // El admin opera en todos los almacenes activos; los demás, solo en los asignados
+    $almacenes = $u->esAdmin()
+        ? Almacen::where('activo', true)->orderBy('nombre')->get()
+        : $u->almacenes()->where('almacenes.activo', true)->orderBy('almacenes.nombre')->get();
 
-    private function formatoUsuario(Usuario $u): array
-    {
-        return [
-            'id_usuario'  => $u->id_usuario,
-            'nom_usuario' => $u->nom_usuario,
-            'nombre'      => $u->nombre,
-            'correo'      => $u->correo,
-            'rol'         => $u->rol?->codigo,
-            'rol_nombre'  => $u->rol?->nombre,
-            'es_admin'    => $u->esAdmin(),
-        ];
-    }
+    return [
+        'id_usuario'        => $u->id_usuario,
+        'nom_usuario'       => $u->nom_usuario,
+        'nombre'            => $u->nombre,
+        'correo'            => $u->correo,
+        'rol'               => $u->rol?->codigo,
+        'rol_nombre'        => $u->rol?->nombre,
+        'es_admin'          => $u->esAdmin(),
+        'almacenes'         => $almacenes->map(fn ($a) => [
+            'id_almacen' => $a->id_almacen,
+            'nombre'     => $a->nombre,
+        ])->values(),
+        'almacen_principal' => $almacenes->first()?->id_almacen,
+        'permisos'          => $u->permisosPorModulo(),
+    ];
+}
 }

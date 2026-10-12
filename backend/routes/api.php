@@ -16,12 +16,20 @@ use App\Http\Controllers\Api\OrdenCompraController;
 use App\Http\Controllers\Api\FacturaController;
 use App\Http\Controllers\Api\NovedadController;
 use App\Http\Controllers\Api\TrasladoController;
-
+use App\Http\Controllers\Api\MotivoDevolucionController;
+use App\Http\Controllers\Api\DevolucionProveedorController;
+use App\Http\Controllers\Api\DevolucionClienteController;
+use App\Http\Controllers\Api\EmbalajeController;
+use App\Http\Controllers\Api\ReporteVentasController;
+use App\Http\Controllers\Api\ReporteComprasController;
+use App\Http\Controllers\Api\ReporteDevolucionesController;
+use App\Http\Controllers\Api\ReporteTrasladosController;
+use App\Http\Controllers\Api\RolController;
 
 Route::post('auth/login', [AuthController::class, 'login']);
 
 
-Route::middleware('auth:api')->group(function () {
+Route::middleware(['auth:api', 'almacen'])->group(function () {
     // ── Auth ─────────────────────────────────────────────
     Route::get('auth/me',      [AuthController::class, 'me']);
     Route::post('auth/logout', [AuthController::class, 'logout']);
@@ -108,9 +116,9 @@ Route::prefix('inventario/tomas')->middleware('permiso:inventario.tomas,editar')
 
 
 
+Route::middleware('permiso:ventas,crear')->get('ventas/borradores', [VentaController::class, 'borradores']);
 Route::middleware('permiso:ventas,ver')->get('ventas', [VentaController::class, 'index']);
 Route::middleware('permiso:ventas,ver')->get('ventas/{id}', [VentaController::class, 'show']);
-Route::middleware('permiso:ventas,crear')->get('ventas/borradores', [VentaController::class, 'borradores']);
 Route::middleware('permiso:ventas,crear')->post('ventas/borrador', [VentaController::class, 'guardarBorrador']);
 Route::middleware('permiso:ventas,crear')->delete('ventas/borrador/{id}', [VentaController::class, 'eliminarBorrador']);
 Route::middleware('permiso:ventas,crear')->post('ventas/cobrar', [VentaController::class, 'cobrar']);
@@ -150,5 +158,65 @@ Route::middleware('permiso:traslados,ver')->get('traslados', [TrasladoController
 Route::middleware('permiso:traslados,ver')->get('traslados/{id}', [TrasladoController::class, 'show']);
 Route::middleware('permiso:traslados,crear')->post('traslados', [TrasladoController::class, 'store']);
 
+
+
+Route::middleware('permiso:devoluciones.proveedor,ver')->get('motivos-devolucion', [MotivoDevolucionController::class, 'index']);
+Route::middleware('permiso:devoluciones.proveedor,crear')->post('motivos-devolucion', [MotivoDevolucionController::class, 'store']);
+Route::middleware('permiso:devoluciones.proveedor,editar')->put('motivos-devolucion/{id}', [MotivoDevolucionController::class, 'update']);
+
+
+
+Route::middleware('permiso:devoluciones.proveedor,ver')->get('devoluciones-proveedor', [DevolucionProveedorController::class, 'index']);
+Route::middleware('permiso:devoluciones.proveedor,crear')->post('devoluciones-proveedor', [DevolucionProveedorController::class, 'store']);
+
+
+
+Route::middleware('permiso:devoluciones.cliente,ver')->get('devoluciones-cliente', [DevolucionClienteController::class, 'index']);
+Route::middleware('permiso:devoluciones.cliente,crear')->post('devoluciones-cliente', [DevolucionClienteController::class, 'store']);
+
+
+
+Route::middleware('permiso:embalajes,ver')->get('embalajes', [EmbalajeController::class, 'index']);
+Route::middleware('permiso:embalajes,crear')->post('embalajes', [EmbalajeController::class, 'store']);
+Route::middleware('permiso:embalajes,editar')->put('embalajes/{id}', [EmbalajeController::class, 'update']);
+Route::middleware('permiso:embalajes,crear')->post('embalajes/{id}/convertir', [EmbalajeController::class, 'convertir']);
+
+
+// Informes de Ventas
+Route::middleware('permiso:informes.ventas,ver')->prefix('reportes/ventas')->group(function () {
+    Route::get('general', [ReporteVentasController::class, 'general']);
+    Route::get('proveedor', [ReporteVentasController::class, 'porProveedor']);
+    Route::get('marca', [ReporteVentasController::class, 'porMarca']);
+    Route::get('linea', [ReporteVentasController::class, 'porLinea']);
+    Route::get('codigo', [ReporteVentasController::class, 'porCodigo']);
+    Route::get('vendedor', [ReporteVentasController::class, 'porVendedor']);
+    Route::get('vendedor-codigo', [ReporteVentasController::class, 'porVendedorCodigo']);
+});
+
+// Informes de Compras
+Route::middleware('permiso:informes.compras,ver')->prefix('reportes/compras')->group(function () {
+    Route::get('general', [ReporteComprasController::class, 'general']);
+    Route::get('proveedor', [ReporteComprasController::class, 'porProveedor']);
+    Route::get('tipo', [ReporteComprasController::class, 'porTipoCompra']);
+});
+
+// Informes de Devoluciones
+Route::middleware('permiso:informes.devoluciones,ver')->prefix('reportes/devoluciones')->group(function () {
+    Route::get('proveedor', [ReporteDevolucionesController::class, 'proveedor']);
+    Route::get('cliente', [ReporteDevolucionesController::class, 'cliente']);
+});
+
+// Informes de Traslados
+Route::middleware('permiso:informes.traslados,ver')->get('reportes/traslados', [ReporteTrasladosController::class, 'general']);
+
+
+
+Route::middleware('permiso:usuarios,ver')->get('roles', [RolController::class, 'index']);
+Route::middleware('permiso:usuarios,ver')->get('roles/catalogo-permisos', [RolController::class, 'catalogoPermisos']);
+Route::middleware('permiso:usuarios,ver')->get('roles/{id}', [RolController::class, 'show']);
+Route::middleware('permiso:usuarios,crear')->post('roles', [RolController::class, 'store']);
+Route::middleware('permiso:usuarios,editar')->put('roles/{id}', [RolController::class, 'update']);
+Route::middleware('permiso:usuarios,eliminar')->delete('roles/{id}', [RolController::class, 'destroy']);
+Route::middleware('permiso:usuarios,editar')->put('roles/{id}/permisos', [RolController::class, 'asignarPermisos']);
 
 });

@@ -6,6 +6,7 @@ use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 use PHPOpenSourceSaver\JWTAuth\Contracts\JWTSubject;
+use Illuminate\Support\Facades\DB;
 
 class Usuario extends Authenticatable implements JWTSubject
 {
@@ -67,21 +68,26 @@ class Usuario extends Authenticatable implements JWTSubject
     }
 
     public function permisosPorModulo(): array
-    {
-        $codigos = Modulo::where('activo', true)->pluck('codigo');
-        $acciones = ['ver', 'crear', 'editar', 'eliminar', 'exportar', 'aprobar'];
+{
+    // Solo las acciones que realmente existen para cada módulo
+    $catalogo = DB::table('permisos as p')
+        ->join('modulos as m', 'm.id_modulo', '=', 'p.id_modulo')
+        ->where('m.activo', true)
+        ->get(['m.codigo', 'p.accion', 'p.id_permiso']);
 
-        $resultado = [];
-        foreach ($codigos as $codigo) {
-            $resultado[$codigo] = [];
-            foreach ($acciones as $accion) {
-                $resultado[$codigo][$accion] = $this->tienePermiso($codigo, $accion);
-            }
-        }
+    // El admin tiene todo; para los demás, un solo query con sus permisos
+    $concedidos = $this->esAdmin()
+        ? null
+        : DB::table('rol_permiso')->where('id_rol', $this->rol_user)->pluck('id_permiso')->flip();
 
-        return $resultado;
+    $resultado = [];
+    foreach ($catalogo as $fila) {
+        $resultado[$fila->codigo][$fila->accion] =
+            $concedidos === null || $concedidos->has((int) $fila->id_permiso);
     }
 
+    return $resultado;
+}
     public function getJWTIdentifier()
     {
         return $this->getKey();
@@ -91,4 +97,18 @@ class Usuario extends Authenticatable implements JWTSubject
     {
         return ['rol' => $this->rol_user];
     }
+    public function almacenesPermitidos(): ?array
+{
+    if ($this->esAdmin()) {
+        return null;
+    }
+
+    return array_map('intval', $this->almacenes()->pluck('almacenes.id_almacen')->all());
+}
+
+public function puedeOperarEn(int $idAlmacen): bool
+{
+    $ids = $this->almacenesPermitidos();
+    return $ids === null || in_array($idAlmacen, $ids, true);
+}
 }

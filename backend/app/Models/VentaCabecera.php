@@ -43,4 +43,8 @@ class VentaCabecera extends Model
     {
         return $this->belongsTo(Cliente::class, 'id_cliente', 'id_cliente');
     }
+    public function devoluciones()
+    {
+        return $this->hasMany(DevolucionCliente::class, 'id_venta', 'id_venta');
+    }
 }

@@ -7,7 +7,6 @@ use App\Models\InventarioAlmacen;
 use App\Models\InventarioMovimiento;
 use App\Models\Producto;
 use App\Models\VentaCabecera;
-use App\Models\VentaDetalle;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\DB;
@@ -17,39 +16,44 @@ use Illuminate\Support\Facades\Validator;
 class VentaController extends Controller
 {
     private array $reglasDetalle = [
-        'detalles'                  => 'required|array|min:1',
-        'detalles.*.id_producto'    => 'required|integer|exists:productos,id_producto',
-        'detalles.*.precio_venta'   => 'required|numeric|min:0',
-        'detalles.*.cantidad'       => 'required|numeric|min:0.01',
-        'detalles.*.impuesto'       => 'nullable|numeric|min:0',
-        'detalles.*.iva_valor'      => 'nullable|numeric|min:0',
-        'detalles.*.descuento_valor'=> 'nullable|numeric|min:0',
-        'detalles.*.utilidad_valor' => 'nullable|numeric|min:0',
-        'detalles.*.total_linea'    => 'required|numeric|min:0',
+        'detalles'                   => 'required|array|min:1',
+        'detalles.*.id_producto'     => 'required|integer|exists:productos,id_producto',
+        'detalles.*.precio_venta'    => 'required|numeric|min:0',
+        'detalles.*.cantidad'        => 'required|numeric|min:0.01',
+        'detalles.*.impuesto'        => 'nullable|numeric|min:0',
+        'detalles.*.iva_valor'       => 'nullable|numeric|min:0',
+        'detalles.*.descuento_valor' => 'nullable|numeric|min:0',
+        'detalles.*.utilidad_valor'  => 'nullable|numeric|min:0',
+        'detalles.*.total_linea'     => 'required|numeric|min:0',
     ];
 
-    // ─── Listar ventas pagadas ──────────────────────────────────
+    // ─── Listar ventas pagadas (solo de los almacenes del usuario) ───
     public function index(Request $request): JsonResponse
     {
         $query = VentaCabecera::with(['detalles', 'cliente', 'vendedor'])
             ->where('estado', 'pagada');
 
-        if ($request->filled('id_almacen')) $query->where('id_almacen', $request->id_almacen);
-        if ($request->filled('doc_venta'))  $query->where('doc_venta', $request->doc_venta);
-        if ($request->filled('fecha_desde'))$query->whereDate('fecha_venta', '>=', $request->fecha_desde);
-        if ($request->filled('fecha_hasta'))$query->whereDate('fecha_venta', '<=', $request->fecha_hasta);
+        if ($request->filled('id_almacen'))  $query->where('id_almacen', $request->id_almacen);
+        if ($request->filled('doc_venta'))   $query->where('doc_venta', $request->doc_venta);
+        if ($request->filled('fecha_desde')) $query->whereDate('fecha_venta', '>=', $request->fecha_desde);
+        if ($request->filled('fecha_hasta')) $query->whereDate('fecha_venta', '<=', $request->fecha_hasta);
+
+        $this->limitarAlmacenes($query, $request);
 
         return response()->json(
             $query->orderByDesc('fecha_venta')->orderByDesc('doc_venta')->paginate($request->get('per_page', 20))
         );
     }
 
-    public function show(int $id): JsonResponse
+    public function show(Request $request, int $id): JsonResponse
     {
         $venta = VentaCabecera::with(['detalles.producto', 'cliente', 'vendedor', 'almacen'])->find($id);
         if (!$venta) {
             return response()->json(['message' => 'Venta no encontrada'], 404);
         }
+
+        $this->autorizarAlmacen($request, $venta->id_almacen);
+
         return response()->json($venta);
     }
 
@@ -109,18 +113,26 @@ class VentaController extends Controller
                     return response()->json(['message' => 'Este borrador no existe o ya fue cobrado.'], 422);
                 }
 
+                // Un borrador solo lo toca su dueño (o un administrador).
+                // Se responde con JSON en vez de abort(): dentro de este try, un
+                // abort sería capturado por el catch y devuelto como error 500.
+                if (!$request->user()->esAdmin() && (int) $cabecera->id_vendedor !== (int) $request->user()->id_usuario) {
+                    DB::rollBack();
+                    return response()->json(['message' => 'Este borrador pertenece a otro vendedor.'], 403);
+                }
+
                 $cabecera->update($datos);
             } else {
                 $cabecera = VentaCabecera::create($datos);
             }
 
-            // Reemplazo completo del detalle — simple y seguro para un borrador.
+            // Reemplazo completo del detalle: simple y seguro para un borrador.
             $cabecera->detalles()->delete();
             foreach ($request->detalles as $d) {
                 $producto = Producto::find($d['id_producto']);
                 $cabecera->detalles()->create([
                     'id_producto'     => $d['id_producto'],
-                    'nombre_producto' => $producto->nombre_producto, // snapshot, nunca confiamos en el nombre que mande el cliente
+                    'nombre_producto' => $producto->nombre_producto, // snapshot: nunca se confía en el nombre que mande el cliente
                     'precio_venta'    => $d['precio_venta'],
                     'cantidad'        => $d['cantidad'],
                     'impuesto'        => $d['impuesto'] ?? 0,
@@ -142,21 +154,25 @@ class VentaController extends Controller
         }
     }
 
-    public function eliminarBorrador(int $id): JsonResponse
+    public function eliminarBorrador(Request $request, int $id): JsonResponse
     {
-        $cabecera = VentaCabecera::where('id_venta', $id)->where('estado', 'borrador')->first();
+        // Un vendedor solo elimina sus propios borradores; el admin, cualquiera.
+        $cabecera = VentaCabecera::where('id_venta', $id)
+            ->where('estado', 'borrador')
+            ->when(!$request->user()->esAdmin(), fn ($q) => $q->where('id_vendedor', $request->user()->id_usuario))
+            ->first();
 
         if (!$cabecera) {
             return response()->json(['message' => 'Borrador no encontrado.'], 404);
         }
 
         $cabecera->detalles()->delete();
-        $cabecera->delete(); // borrado físico — un borrador nunca tocó inventario, no hay nada que reversar
+        $cabecera->delete(); // borrado físico: un borrador nunca tocó inventario, no hay nada que reversar
 
         return response()->json(['ok' => true]);
     }
 
-    // ─── COBRAR — convierte borrador en venta pagada, o crea una directa ───
+    // ─── COBRAR: convierte un borrador en venta pagada, o crea una directa ───
     public function cobrar(Request $request): JsonResponse
     {
         $validator = Validator::make($request->all(), array_merge([
@@ -178,11 +194,13 @@ class VentaController extends Controller
 
         DB::beginTransaction();
         try {
-            // Advisory lock: garantiza doc_venta secuencial sin huecos ni
-            // duplicados aunque dos cajeros cobren al mismo tiempo.
+            // Advisory lock: doc_venta secuencial sin huecos ni duplicados aunque
+            // dos cajeros cobren al mismo tiempo.
             DB::statement('SELECT pg_advisory_xact_lock(12345)');
 
-            $nextDoc = (VentaCabecera::where('estado', 'pagada')->max('doc_venta') ?? 0) + 1;
+            // Se consideran TODOS los documentos ya usados (incluidas ventas anuladas):
+            // un número de documento anulado nunca se reutiliza.
+            $nextDoc = (VentaCabecera::whereNotNull('doc_venta')->max('doc_venta') ?? 0) + 1;
 
             $datos = [
                 'doc_venta'             => $nextDoc,
@@ -206,6 +224,11 @@ class VentaController extends Controller
                 if (!$cabecera || $cabecera->estado !== 'borrador') {
                     DB::rollBack();
                     return response()->json(['message' => 'Esta venta ya fue cobrada o no existe.'], 422);
+                }
+
+                if (!$request->user()->esAdmin() && (int) $cabecera->id_vendedor !== (int) $request->user()->id_usuario) {
+                    DB::rollBack();
+                    return response()->json(['message' => 'Este borrador pertenece a otro vendedor.'], 403);
                 }
 
                 $cabecera->update($datos);
@@ -263,9 +286,9 @@ class VentaController extends Controller
             DB::commit();
 
             return response()->json([
-                'id_venta'   => $cabecera->id_venta,
-                'doc_venta'  => $cabecera->doc_venta,
-                'estado'     => 'pagada',
+                'id_venta'     => $cabecera->id_venta,
+                'doc_venta'    => $cabecera->doc_venta,
+                'estado'       => 'pagada',
                 'advertencias' => $advertencias,
             ], 201);
 
@@ -276,7 +299,7 @@ class VentaController extends Controller
         }
     }
 
-    // ─── ANULAR una venta pagada — reversa inventario (corrige el bug del legacy) ───
+    // ─── ANULAR una venta pagada: reversa el inventario ───
     public function anular(Request $request, int $id): JsonResponse
     {
         $cabecera = VentaCabecera::with('detalles')->find($id);
@@ -284,6 +307,9 @@ class VentaController extends Controller
         if (!$cabecera || $cabecera->estado !== 'pagada') {
             return response()->json(['message' => 'Venta no encontrada o no está pagada.'], 422);
         }
+
+        // Antes de abrir la transacción, para que el 403 no se confunda con un error interno
+        $this->autorizarAlmacen($request, $cabecera->id_almacen);
 
         DB::beginTransaction();
         try {

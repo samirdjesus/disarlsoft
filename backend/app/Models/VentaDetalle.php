@@ -13,7 +13,7 @@ class VentaDetalle extends Model
     protected $fillable = [
         'id_venta', 'id_producto', 'nombre_producto', 'precio_venta',
         'cantidad', 'impuesto', 'iva_valor', 'descuento_valor',
-        'costo_unitario', 'utilidad_valor', 'total_linea',
+        'costo_unitario', 'utilidad_valor', 'total_linea', 'cantidad_devuelta',
     ];
 
     public function cabecera()

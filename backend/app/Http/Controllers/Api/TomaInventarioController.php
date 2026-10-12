@@ -14,6 +14,16 @@ use Illuminate\Support\Facades\Validator;
 
 class TomaInventarioController extends Controller
 {
+    // Carga una toma y comprueba que el usuario tenga acceso a su almacén.
+    private function tomaAutorizada(Request $request, int $id): TomaInventario
+    {
+        $toma = TomaInventario::find($id);
+        abort_if(!$toma, 404, 'Toma no encontrada');
+        $this->autorizarAlmacen($request, $toma->id_almacen);
+
+        return $toma;
+    }
+
     public function index(Request $request): JsonResponse
     {
         $query = TomaInventario::with('almacen');
@@ -21,19 +31,20 @@ class TomaInventarioController extends Controller
         if ($request->filled('id_almacen')) $query->where('id_almacen', $request->id_almacen);
         if ($request->filled('estado'))     $query->where('estado', $request->estado);
 
+        $this->limitarAlmacenes($query, $request);
+
         return response()->json($query->orderByDesc('fecha_apertura')->paginate(20));
     }
 
-    public function show(int $id): JsonResponse
+    public function show(Request $request, int $id): JsonResponse
     {
+        $this->tomaAutorizada($request, $id);
+
         $toma = TomaInventario::with(['almacen', 'usuarioApertura', 'usuarioCierre'])->find($id);
-        if (!$toma) {
-            return response()->json(['message' => 'Toma no encontrada'], 404);
-        }
         return response()->json($toma);
     }
 
-    // POST /inventario/tomas — abre una toma y congela el stock actual
+    // POST /inventario/tomas: abre una toma y congela el stock actual
     // de TODOS los productos con registro en ese almacén.
     public function abrir(Request $request): JsonResponse
     {
@@ -47,7 +58,7 @@ class TomaInventarioController extends Controller
             return response()->json(['message' => 'Datos inválidos', 'errors' => $validator->errors()], 422);
         }
 
-        // No permitir dos tomas abiertas al mismo tiempo en el mismo almacén
+        // No se permiten dos tomas abiertas al mismo tiempo en el mismo almacén
         $yaAbierta = TomaInventario::where('id_almacen', $request->id_almacen)
             ->where('estado', 'abierta')
             ->exists();
@@ -82,8 +93,10 @@ class TomaInventarioController extends Controller
         return response()->json($toma->load('detalles'), 201);
     }
 
-    public function detalles(int $id): JsonResponse
+    public function detalles(Request $request, int $id): JsonResponse
     {
+        $this->tomaAutorizada($request, $id);
+
         $detalles = DetalleTomaInventario::with('producto')
             ->where('id_toma', $id)
             ->orderBy('id_detalle')
@@ -92,11 +105,12 @@ class TomaInventarioController extends Controller
         return response()->json($detalles);
     }
 
-    // Pensado para usarse con lector de código de barras: busca el
-    // detalle de la toma por el código del producto, para que el
-    // bodeguero escanee y el frontend ya sepa qué fila actualizar.
-    public function buscarDetalle(int $id, string $cod): JsonResponse
+    // Pensado para el lector de código de barras: busca el detalle de la toma
+    // por el código del producto, para que el frontend sepa qué fila actualizar.
+    public function buscarDetalle(Request $request, int $id, string $cod): JsonResponse
     {
+        $this->tomaAutorizada($request, $id);
+
         $detalle = DetalleTomaInventario::with('producto')
             ->where('id_toma', $id)
             ->whereHas('producto', fn ($q) => $q->where('cod_producto', $cod))
@@ -109,13 +123,15 @@ class TomaInventarioController extends Controller
         return response()->json($detalle);
     }
 
-    // POST /inventario/tomas/{id}/conteo — registra el conteo físico de un producto
+    // POST /inventario/tomas/{id}/conteo: registra el conteo físico de un producto
     public function registrarConteo(Request $request, int $id): JsonResponse
     {
         $toma = TomaInventario::find($id);
         if (!$toma || $toma->estado !== 'abierta') {
             return response()->json(['message' => 'Toma no encontrada o ya cerrada.'], 422);
         }
+
+        $this->autorizarAlmacen($request, $toma->id_almacen);
 
         $validator = Validator::make($request->all(), [
             'id_producto'   => 'required|integer|exists:productos,id_producto',
@@ -136,33 +152,35 @@ class TomaInventarioController extends Controller
         }
 
         $detalle->update([
-            'stock_contado'      => $request->stock_contado,
-            'diferencia'         => $request->stock_contado - $detalle->stock_sistema,
-            'id_usuario_conteo'  => $request->user()->id_usuario,
-            'fecha_conteo'       => now(),
-            'observaciones'      => $request->observaciones,
+            'stock_contado'     => $request->stock_contado,
+            'diferencia'        => $request->stock_contado - $detalle->stock_sistema,
+            'id_usuario_conteo' => $request->user()->id_usuario,
+            'fecha_conteo'      => now(),
+            'observaciones'     => $request->observaciones,
         ]);
 
         return response()->json($detalle->fresh('producto'));
     }
 
-    // GET /inventario/tomas/{id}/comparativo — resumen antes de cerrar
-    public function comparativo(int $id): JsonResponse
+    // GET /inventario/tomas/{id}/comparativo: resumen antes de cerrar
+    public function comparativo(Request $request, int $id): JsonResponse
     {
+        $this->tomaAutorizada($request, $id);
+
         $detalles = DetalleTomaInventario::with('producto')->where('id_toma', $id)->get();
 
         return response()->json([
-            'total_productos'     => $detalles->count(),
-            'contados'            => $detalles->whereNotNull('stock_contado')->count(),
-            'pendientes'          => $detalles->whereNull('stock_contado')->count(),
-            'con_diferencia'      => $detalles->where('diferencia', '!=', 0)->whereNotNull('diferencia')->count(),
-            'sobrantes'           => $detalles->where('diferencia', '>', 0)->count(),
-            'faltantes'           => $detalles->where('diferencia', '<', 0)->count(),
-            'detalles'            => $detalles,
+            'total_productos' => $detalles->count(),
+            'contados'        => $detalles->whereNotNull('stock_contado')->count(),
+            'pendientes'      => $detalles->whereNull('stock_contado')->count(),
+            'con_diferencia'  => $detalles->where('diferencia', '!=', 0)->whereNotNull('diferencia')->count(),
+            'sobrantes'       => $detalles->where('diferencia', '>', 0)->count(),
+            'faltantes'       => $detalles->where('diferencia', '<', 0)->count(),
+            'detalles'        => $detalles,
         ]);
     }
 
-    // POST /inventario/tomas/{id}/cerrar — aplica los ajustes a inventario_almacen
+    // POST /inventario/tomas/{id}/cerrar: aplica los ajustes a inventario_almacen
     // y genera los movimientos de auditoría correspondientes.
     public function cerrar(Request $request, int $id): JsonResponse
     {
@@ -170,6 +188,8 @@ class TomaInventarioController extends Controller
         if (!$toma || $toma->estado !== 'abierta') {
             return response()->json(['message' => 'Toma no encontrada o ya cerrada.'], 422);
         }
+
+        $this->autorizarAlmacen($request, $toma->id_almacen);
 
         $pendientes = DetalleTomaInventario::where('id_toma', $id)->whereNull('stock_contado')->count();
         if ($pendientes > 0) {
@@ -208,9 +228,9 @@ class TomaInventarioController extends Controller
             }
 
             $toma->update([
-                'estado'             => 'cerrada',
-                'fecha_cierre'       => now(),
-                'id_usuario_cierre'  => $request->user()->id_usuario,
+                'estado'            => 'cerrada',
+                'fecha_cierre'      => now(),
+                'id_usuario_cierre' => $request->user()->id_usuario,
             ]);
         });
 

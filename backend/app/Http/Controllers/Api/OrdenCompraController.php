@@ -6,17 +6,16 @@ use App\Http\Controllers\Controller;
 use App\Models\Almacen;
 use App\Models\OrdenCompra;
 use App\Models\Producto;
+use Barryvdh\DomPDF\Facade\Pdf;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Validator;
-use Barryvdh\DomPDF\Facade\Pdf;
 
 class OrdenCompraController extends Controller
 {
-    // Genera OC-{ALMACEN}-{YYYYMMDD}-{consecutivo}, reiniciado por
-    // almacén y por día. lockForUpdate evita que dos personas generen
-    // el mismo número si cotizan al mismo tiempo.
+    // Genera OC-{ALMACEN}-{YYYYMMDD}-{consecutivo}, reiniciado por almacén y por
+    // día. lockForUpdate evita que dos personas generen el mismo número.
     private function generarNumeroOrden(int $idAlmacen): string
     {
         $almacen = Almacen::findOrFail($idAlmacen);
@@ -37,7 +36,7 @@ class OrdenCompraController extends Controller
         });
     }
 
-    // GET /proveedores/{id}/productos?id_almacen=X — para armar el carrito de la OC
+    // GET /proveedores/{id}/productos?id_almacen=X: para armar el carrito de la OC
     public function productosPorProveedor(Request $request, int $idProveedor): JsonResponse
     {
         $idAlmacen = (int) $request->query('id_almacen', 0);
@@ -72,28 +71,33 @@ class OrdenCompraController extends Controller
         if ($request->filled('id_proveedor')) $query->where('id_proveedor', $request->id_proveedor);
         if ($request->filled('estado'))       $query->where('estado', $request->estado);
 
+        $this->limitarAlmacenes($query, $request);
+
         return response()->json($query->orderByDesc('id_orden')->paginate($request->get('per_page', 20)));
     }
 
-    public function show(int $id): JsonResponse
+    public function show(Request $request, int $id): JsonResponse
     {
         $orden = OrdenCompra::with(['detalles.producto', 'proveedor', 'almacen', 'usuario'])->find($id);
         if (!$orden) {
             return response()->json(['message' => 'Orden no encontrada'], 404);
         }
+
+        $this->autorizarAlmacen($request, $orden->id_almacen);
+
         return response()->json($orden);
     }
 
     public function store(Request $request): JsonResponse
     {
         $validator = Validator::make($request->all(), [
-            'id_almacen'                  => 'required|integer|exists:almacenes,id_almacen',
-            'id_proveedor'                => 'required|integer|exists:proveedores,id_proveedor',
-            'observaciones'               => 'nullable|string|max:300',
-            'detalles'                    => 'required|array|min:1',
-            'detalles.*.id_producto'      => 'required|integer|exists:productos,id_producto',
-            'detalles.*.precio_cotizado'  => 'required|numeric|min:0',
-            'detalles.*.cantidad_pedida'  => 'required|numeric|min:0.01',
+            'id_almacen'                 => 'required|integer|exists:almacenes,id_almacen',
+            'id_proveedor'               => 'required|integer|exists:proveedores,id_proveedor',
+            'observaciones'              => 'nullable|string|max:300',
+            'detalles'                   => 'required|array|min:1',
+            'detalles.*.id_producto'     => 'required|integer|exists:productos,id_producto',
+            'detalles.*.precio_cotizado' => 'required|numeric|min:0',
+            'detalles.*.cantidad_pedida' => 'required|numeric|min:0.01',
         ]);
 
         if ($validator->fails()) {
@@ -112,12 +116,12 @@ class OrdenCompraController extends Controller
                 $subtotal += $totalLinea;
 
                 $lineas[] = [
-                    'id_producto'      => $d['id_producto'],
-                    'nombre_producto'  => $producto->nombre_producto,
-                    'precio_cotizado'  => $d['precio_cotizado'],
-                    'cantidad_pedida'  => $d['cantidad_pedida'],
-                    'subtotal_linea'   => $totalLinea,
-                    'total_linea'      => $totalLinea,
+                    'id_producto'     => $d['id_producto'],
+                    'nombre_producto' => $producto->nombre_producto,
+                    'precio_cotizado' => $d['precio_cotizado'],
+                    'cantidad_pedida' => $d['cantidad_pedida'],
+                    'subtotal_linea'  => $totalLinea,
+                    'total_linea'     => $totalLinea,
                 ];
             }
 
@@ -141,21 +145,26 @@ class OrdenCompraController extends Controller
         return response()->json($orden->load(['detalles', 'proveedor', 'almacen']), 201);
     }
 
-    public function anular(int $id): JsonResponse
+    public function anular(Request $request, int $id): JsonResponse
     {
         $orden = OrdenCompra::find($id);
         if (!$orden || $orden->estado !== 'abierta') {
             return response()->json(['message' => 'Orden no encontrada o no está abierta.'], 422);
         }
 
+        $this->autorizarAlmacen($request, $orden->id_almacen);
+
         $orden->update(['estado' => 'anulada']);
         return response()->json(['message' => 'Orden anulada correctamente']);
     }
 
-    public function pdf(int $id)
+    public function pdf(Request $request, int $id)
     {
-    $orden = OrdenCompra::with(['detalles', 'proveedor', 'almacen', 'usuario'])->findOrFail($id);
-    $pdf = Pdf::loadView('pdf.orden_compra', ['orden' => $orden]);
-    return $pdf->stream("{$orden->numero_orden}.pdf");
+        $orden = OrdenCompra::with(['detalles', 'proveedor', 'almacen', 'usuario'])->findOrFail($id);
+
+        $this->autorizarAlmacen($request, $orden->id_almacen);
+
+        $pdf = Pdf::loadView('pdf.orden_compra', ['orden' => $orden]);
+        return $pdf->stream("{$orden->numero_orden}.pdf");
     }
 }
