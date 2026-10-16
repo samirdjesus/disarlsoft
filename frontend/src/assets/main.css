@@ -1,1 +1,68 @@
 @import "tailwindcss";
+
+@theme {
+  --font-sans: "Schibsted Grotesk Variable", ui-sans-serif, system-ui, sans-serif;
+
+  /* Tinta de ciruela: barra lateral y títulos */
+  --color-ink-900: #241233;
+  --color-ink-800: #321a47;
+  --color-ink-700: #45265f;
+  --color-ink-300: #bcaad0;
+
+  /* Ciruela: acciones principales y foco */
+  --color-plum-700: #57237a;
+  --color-plum-600: #6a2c91;
+  --color-plum-100: #efe5f6;
+
+  /* Neblina: fondos, bordes y texto secundario */
+  --color-mist-50: #f5f3f8;
+  --color-mist-100: #ece8f1;
+  --color-mist-200: #ded8e6;
+  --color-mist-600: #6a6176;
+
+  /* Estados de inventario: bien, bajo el mínimo, agotado o destructivo */
+  --color-jade-700: #176b53;
+  --color-jade-100: #dcf2ea;
+  --color-honey-700: #8f5d06;
+  --color-honey-100: #fbf0d6;
+  --color-crimson-700: #a32d3f;
+  --color-crimson-100: #fbe4e7;
+}
+
+@layer base {
+  html {
+    background-color: var(--color-mist-50);
+    color: var(--color-ink-900);
+    -webkit-font-smoothing: antialiased;
+    /* Cifras de igual ancho: las columnas de cantidades y precios quedan alineadas */
+    font-variant-numeric: tabular-nums;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-plum-600);
+    outline-offset: 2px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+}
+
+@layer components {
+  .campo {
+    @apply block w-full rounded-lg border border-mist-200 bg-white px-3.5 py-2.5 text-base text-ink-900 transition-colors placeholder:text-mist-600 hover:border-mist-600;
+  }
+
+  .btn-primario {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg bg-plum-600 px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-plum-700 disabled:cursor-not-allowed disabled:opacity-60;
+  }
+
+  .btn-secundario {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg border border-mist-200 bg-white px-4 py-2.5 text-sm font-semibold text-ink-900 transition-colors hover:bg-mist-100 disabled:cursor-not-allowed disabled:opacity-60;
+  }
+}
